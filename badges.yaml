@@ -1,0 +1,11 @@
+---
+logos:
+  - &docker https://storage.googleapis.com/software-builds-badges/icons/docker.png
+
+triggers: !TriggerList
+  - name: chippy-docker-noetic-cuda-push
+    left_text: CUDA Container
+    logo_uri: *docker
+  - name: chippy-docker-noetic-mesa-push
+    left_text: Mesa Container
+    logo_uri: *docker

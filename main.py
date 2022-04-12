@@ -1,63 +1,49 @@
-from google.cloud import storage, exceptions
-
+"""Push a badge in response to a build event"""
 import base64
 import json
 import os
-import re
 from string import Template
 
+import google.cloud
+from google.cloud import storage
 
-def copy_badge(bucket_name, obj, new_obj):
+from cloud_build_badge import BadgeMaker
+
+_DFEAULT_TEMPLATE = "builds/${repo}/branches/${branch}/${trigger}.svg"
+
+
+def copy_badge(bucket, obj, new_obj):
+    """Copy a badge to a public cloud storage bucket."""
     client = storage.Client()
 
     try:
-        bucket = client.get_bucket(bucket_name)
-    except exceptions.NotFound:
-        raise RuntimeError(f"Could not find bucket {bucket_name}")
-    else:
-        blob = bucket.get_blob(obj)
-        if blob is None:
-            raise RuntimeError(f"Could not find object {obj} in bucket {bucket_name}")
-        else:
-            bucket.copy_blob(blob, bucket, new_name=new_obj)
+        bucket = client.get_bucket(bucket)
+    except google.cloud.exceptions.NotFound as ex:
+        raise RuntimeError(f"Could not find bucket {bucket}") from ex
+
+    blob = bucket.get_blob(obj)
+    if blob is None:
+        raise RuntimeError(f"Couldn't find object {obj} in bucket {bucket}")
+
+    bucket.copy_blob(blob, bucket, new_name=new_obj)
 
 
-def build_badge(event, context):
-    """
-    Background Cloud Function to be triggered by Pub/Sub.
-
-    Updates repository build badge. Triggered by incoming
-    pubsub messages from Google Cloud Build.
-    """
-
+def build_badge(event, context) -> None:
+    """Create an push a badge in response to a build event."""
     decoded = base64.b64decode(event["data"]).decode("utf-8")
     data = json.loads(decoded)
 
+    subs = data["substitutions"]
+    status = data["status"]
     bucket = os.environ["BADGES_BUCKET"]
+    repo = subs["REPO_NAME"]
+    branch = subs["BRANCH_NAME"]
+    trigger = subs["TRIGGER_NAME"]
 
+    tmpl = os.environ.get("TEMPLATE_PATH", _DFEAULT_TEMPLATE)
     try:
-        repo = data["source"]["repoSource"]["repoName"]
-        branch = data["source"]["repoSource"]["branchName"]
-
-        if repo.startswith("github_") or repo.startswith("bitbucket_"):
-            # mirrored repo format: (github|bitbucket)_<owner>_<repo>
-            repo = repo.split("_", 2)[-1]
+        src = BadgeMaker.make_badge(trigger, status)
     except KeyError:
-        # github app
-        repo = data["substitutions"]["REPO_NAME"]
-        branch = data["substitutions"]["BRANCH_NAME"]
-        trigger = data["substitutions"]["TRIGGER_NAME"]
-    finally:
-        if not trigger:
-            return
-
-        tmpl = os.environ.get(
-            "TEMPLATE_PATH", "builds/${repo}/branches/${branch}/${trigger}.svg"
-        )
-
-        src = f"badges/{data['status'].lower()}.svg"
-        dest = Template(tmpl).substitute(repo=repo, branch=branch, trigger=trigger)
-
-        copy_badge(bucket, src, dest)
-
-        return
+        src = f"badges/{status.lower()}.svg"
+    dest = Template(tmpl).substitute(repo=repo, branch=branch, trigger=trigger)
+    copy_badge(bucket, src, dest)
